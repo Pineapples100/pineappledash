@@ -31,6 +31,15 @@ async function validateCFAccessJWT(request) {
   } catch(e) { return false; }
 }
 
+// Fetch abandoned cart data from KV
+async function getCartData(kv) {
+  try {
+    const raw = await kv.get('abandoned_carts');
+    if (!raw) return { error: 'No data yet' };
+    return JSON.parse(raw);
+  } catch(e) { return { error: e.message }; }
+}
+
 // Fetch live Stripe data for a given day range
 async function getStripeData(apiKey, days) {
   try {
@@ -253,7 +262,7 @@ function rangeName(days) {
   return `${days} Days`;
 }
 
-function renderDashboard(rezdy, stripe, ga4, speed, days) {
+function renderDashboard(rezdy, stripe, ga4, speed, carts, days) {
   const now = new Date().toLocaleString('en-AU', {timeZone:'Australia/Brisbane',dateStyle:'medium',timeStyle:'short'});
   const rng = rangeName(days);
 
@@ -583,6 +592,36 @@ function renderDashboard(rezdy, stripe, ga4, speed, days) {
             <div><div class="booking-name">Inside Australia Travel</div><div class="booking-detail">Bos party · 5 Apr · PTQVVF7Y</div></div>
             <span class="badge badge-orange">PREPAY DUE</span>
           </div>
+        </div>
+
+        <!-- Abandoned carts -->
+        <div class="card">
+          <div class="section-title">🛒 Abandoned Carts</div>
+          ${carts.error ? `<div class="empty-state">${carts.error}</div>` : `
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+            <div class="kpi-box" style="padding:10px">
+              <div class="kpi-value" style="font-size:20px;color:#e05252">${carts.totalAbandoned || 0}</div>
+              <div class="kpi-label">Total Abandoned</div>
+            </div>
+            <div class="kpi-box" style="padding:10px">
+              <div class="kpi-value" style="font-size:20px;color:#f5a623">$${Number(carts.totalValue||0).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
+              <div class="kpi-label">Lost Value</div>
+            </div>
+          </div>
+          <div style="margin-bottom:8px">
+            <div class="row"><span class="row-label">Pending action</span><span class="row-value" style="color:${carts.pendingAction>0?'#f5a623':'#27c27b'}">${carts.pendingAction} cart${carts.pendingAction!==1?'s':''}</span></div>
+            <div class="row" style="margin-bottom:0"><span class="row-label">Max emails sent</span><span class="row-value" style="color:#6b7280">${carts.maxEmails} carts</span></div>
+          </div>
+          ${(carts.carts||[]).filter(c=>c.status==='pending').slice(0,3).map(c=>`
+          <div class="booking-row">
+            <div>
+              <div class="booking-name" style="font-size:11px">${c.email.split('@')[0]}@…</div>
+              <div class="booking-detail">Tour: ${c.tour} · ${c.sendCount}/3 emails sent</div>
+            </div>
+            <div class="booking-amount">$${Number(c.amount).toLocaleString()}</div>
+          </div>`).join('') || '<div class="empty-state" style="padding:8px">No carts pending action</div>'}
+          <div style="font-size:10px;color:#6b7280;margin-top:8px">Updated: ${carts.updatedAt ? new Date(carts.updatedAt).toLocaleString('en-AU',{timeZone:'Australia/Brisbane',dateStyle:'short',timeStyle:'short'}) : '—'}</div>
+          `}
         </div>
 
         <!-- Site speed snapshot -->
@@ -1182,14 +1221,15 @@ export default {
     const days = [1, 7, 30, 90].includes(parseInt(rangeParam)) ? parseInt(rangeParam) : 7;
 
     // Fetch live data in parallel
-    const [rezdy, stripe, ga4, speed] = await Promise.all([
+    const [rezdy, stripe, ga4, speed, carts] = await Promise.all([
       getRezdyData(env.REZDY_API_KEY, days),
       getStripeData(env.STRIPE_SECRET_KEY, days),
       getGA4Data(env.GA4_SERVICE_ACCOUNT, days),
-      getPageSpeed()
+      getPageSpeed(),
+      getCartData(env.DASH_KV)
     ]);
 
-    return new Response(renderDashboard(rezdy, stripe, ga4, speed, days), {
+    return new Response(renderDashboard(rezdy, stripe, ga4, speed, carts, days), {
       headers:{
         "Content-Type":"text/html",
         "X-Frame-Options":"DENY",

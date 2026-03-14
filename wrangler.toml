@@ -5,3 +5,7 @@ compatibility_date = "2024-01-01"
 [[routes]]
 pattern = "dashboard.pineappletours.com.au"
 custom_domain = true
+
+[[kv_namespaces]]
+binding = "DASH_KV"
+id = "2fb2834bee1d4755941fa62d01493c09"
