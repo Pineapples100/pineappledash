@@ -1,7 +1,7 @@
 // OpenClaw Command Dashboard — Cloudflare Worker v2
 // Cloudflare Access JWT validation + password fallback
 
-const CF_ACCESS_AUD = "0fe8baeaf5db45e30644e10212729e9aea7a69760c686cd9226c2093e787bffc";
+const CF_ACCESS_AUD = "6242de50878373502990b8b40d2b33f1d556988a5a829e06a81f3dfa63da7d5d";
 const CF_JWKS_URL = "https://pineapples.cloudflareaccess.com/cdn-cgi/access/certs";
 const PASSWORD = "openclaw2026";
 const COOKIE_NAME = "oc_auth";
