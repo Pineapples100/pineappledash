@@ -1,6 +1,6 @@
-// Pineapple Tours Live Dashboard — Cloudflare Worker
+// Pineapple Tours Live Dashboard — Cloudflare Worker v2
 // dashboard.pineappletours.com.au
-// Live data: Rezdy bookings, Stripe revenue, PageSpeed
+// Features: Date range selector, Dark/Light mode, Combined Rezdy+Stripe view
 
 const CF_ACCESS_AUD = "6242de50878373502990b8b40d2b33f1d556988a5a829e06a81f3dfa63da7d5d";
 const CF_JWKS_URL = "https://pineapples.cloudflareaccess.com/cdn-cgi/access/certs";
@@ -31,67 +31,60 @@ async function validateCFAccessJWT(request) {
   } catch(e) { return false; }
 }
 
-// Fetch live Stripe data
-async function getStripeData(apiKey) {
+// Fetch live Stripe data for a given day range
+async function getStripeData(apiKey, days) {
   try {
     const now = Math.floor(Date.now()/1000);
-    const weekAgo = now - 7*24*60*60;
-    const monthStart = Math.floor(new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime()/1000);
-
+    const rangeStart = now - days*24*60*60;
     const headers = { 'Authorization': 'Basic ' + btoa(apiKey + ':') };
 
-    const [weekRes, mtdRes, balanceRes] = await Promise.all([
-      fetch(`https://api.stripe.com/v1/charges?created[gte]=${weekAgo}&limit=100`, {headers}),
-      fetch(`https://api.stripe.com/v1/charges?created[gte]=${monthStart}&limit=100`, {headers}),
+    const [rangeRes, balanceRes] = await Promise.all([
+      fetch(`https://api.stripe.com/v1/charges?created[gte]=${rangeStart}&limit=100`, {headers}),
       fetch('https://api.stripe.com/v1/balance', {headers})
     ]);
 
-    const [weekData, mtdData, balData] = await Promise.all([weekRes.json(), mtdRes.json(), balanceRes.json()]);
+    const [rangeData, balData] = await Promise.all([rangeRes.json(), balanceRes.json()]);
 
-    const weekCharges = (weekData.data||[]).filter(c => c.paid && !c.refunded);
-    const mtdCharges = (mtdData.data||[]).filter(c => c.paid && !c.refunded);
-    const weekRevenue = weekCharges.reduce((s,c) => s + c.amount, 0) / 100;
-    const mtdRevenue = mtdCharges.reduce((s,c) => s + c.amount, 0) / 100;
+    const charges = (rangeData.data||[]).filter(c => c.paid && !c.refunded);
+    const revenue = charges.reduce((s,c) => s + c.amount, 0) / 100;
 
     const available = (balData.available||[]).find(b => b.currency==='aud')?.amount/100 || 0;
     const pending = (balData.pending||[]).find(b => b.currency==='aud')?.amount/100 || 0;
 
-    return { weekRevenue: weekRevenue.toFixed(2), weekCount: weekCharges.length, mtdRevenue: mtdRevenue.toFixed(2), mtdCount: mtdCharges.length, available: available.toFixed(2), pending: pending.toFixed(2) };
+    return {
+      revenue: revenue.toFixed(2),
+      count: charges.length,
+      available: available.toFixed(2),
+      pending: pending.toFixed(2)
+    };
   } catch(e) { return { error: e.message }; }
 }
 
-// Fetch live Rezdy data
-async function getRezdyData(apiKey) {
+// Fetch live Rezdy data for a given day range
+async function getRezdyData(apiKey, days) {
   try {
     const now = new Date();
-    const weekAgo = new Date(now - 7*24*60*60*1000);
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const rangeStart = new Date(now - days*24*60*60*1000);
     const fmt = d => d.toISOString().slice(0,10);
 
-    const [weekRes, mtdRes, upcomingRes] = await Promise.all([
-      fetch(`https://api.rezdy.com/v1/bookings?apiKey=${apiKey}&limitNum=100&createdAfterDate=${fmt(weekAgo)}`),
-      fetch(`https://api.rezdy.com/v1/bookings?apiKey=${apiKey}&limitNum=100&createdAfterDate=${fmt(monthStart)}`),
-      fetch(`https://api.rezdy.com/v1/bookings?apiKey=${apiKey}&limitNum=10&afterDateTime=${now.toISOString().slice(0,10)}T00:00:00&status=CONFIRMED`)
+    const [rangeRes, upcomingRes] = await Promise.all([
+      fetch(`https://api.rezdy.com/v1/bookings?apiKey=${apiKey}&limitNum=100&createdAfterDate=${fmt(rangeStart)}`),
+      fetch(`https://api.rezdy.com/v1/bookings?apiKey=${apiKey}&limitNum=10&afterDateTime=${fmt(now)}T00:00:00&status=CONFIRMED`)
     ]);
 
-    const [weekData, mtdData, upcomingData] = await Promise.all([weekRes.json(), mtdRes.json(), upcomingRes.json()]);
+    const [rangeData, upcomingData] = await Promise.all([rangeRes.json(), upcomingRes.json()]);
 
-    const weekBookings = weekData.bookings || [];
-    const mtdBookings = mtdData.bookings || [];
+    const bookings = rangeData.bookings || [];
     const upcoming = upcomingData.bookings || [];
 
-    const weekConfirmed = weekBookings.filter(b => b.status === 'CONFIRMED');
-    const mtdConfirmed = mtdBookings.filter(b => b.status === 'CONFIRMED');
-    const weekRevenue = weekConfirmed.reduce((s,b) => s + parseFloat(b.totalAmount||0), 0);
-    const mtdRevenue = mtdConfirmed.reduce((s,b) => s + parseFloat(b.totalAmount||0), 0);
-    const weekCancelled = weekBookings.filter(b => b.status === 'CANCELLED').length;
+    const confirmed = bookings.filter(b => b.status === 'CONFIRMED');
+    const cancelled = bookings.filter(b => b.status === 'CANCELLED').length;
+    const revenue = confirmed.reduce((s,b) => s + parseFloat(b.totalAmount||0), 0);
 
     return {
-      weekBookings: weekConfirmed.length,
-      weekRevenue: weekRevenue.toFixed(2),
-      weekCancelled,
-      mtdBookings: mtdConfirmed.length,
-      mtdRevenue: mtdRevenue.toFixed(2),
+      bookings: confirmed.length,
+      revenue: revenue.toFixed(2),
+      cancelled,
       upcoming: upcoming.slice(0,5).map(b => ({
         ref: b.orderNumber,
         name: b.customer ? `${b.customer.firstName} ${b.customer.lastName}` : 'Guest',
@@ -123,32 +116,104 @@ async function getPageSpeed() {
   }
 }
 
-function scoreColor(n) {
-  if (n === '—') return '#6b7280';
+function scoreColor(n, dark=true) {
+  if (n === '—') return dark ? '#6b7280' : '#9ca3af';
   if (n >= 90) return '#27c27b';
   if (n >= 50) return '#f5a623';
   return '#e05252';
 }
 
-function renderDashboard(rezdy, stripe, speed) {
+function rangeName(days) {
+  if (days === 1) return 'Today';
+  if (days === 7) return '7 Days';
+  if (days === 30) return '30 Days';
+  if (days === 90) return '90 Days';
+  return `${days} Days`;
+}
+
+function renderDashboard(rezdy, stripe, speed, days) {
   const now = new Date().toLocaleString('en-AU', {timeZone:'Australia/Brisbane',dateStyle:'medium',timeStyle:'short'});
+  const rng = rangeName(days);
+
+  // Sales breakdown calculation
+  const rezdyRev = parseFloat(rezdy.revenue || 0);
+  const stripeRev = parseFloat(stripe.revenue || 0);
+  const directPct = rezdyRev > 0 ? Math.round((stripeRev / rezdyRev) * 100) : 0;
+  const agentPct = 100 - directPct;
+
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="refresh" content="300">
 <title>Pineapple Tours Dashboard</title>
 <style>
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d2e;
+    --card-border: #252840;
+    --text: #e8eaf0;
+    --text-muted: #6b7280;
+    --text-sub: #9ca3af;
+    --kpi-bg: #12151f;
+    --input-bg: #12151f;
+    --link-bg: #12151f;
+    --tab-border: #252840;
+    --hr: #252840;
+    --booking-border: #252840;
+    --card-urgent-bg: #1e0d0d;
+    --card-urgent-border: #5a2020;
+    --card-good-bg: #0d1a10;
+    --card-good-border: #1a4a25;
+    --hl-green-bg: #101a10;
+    --hl-green-border: #27c27b44;
+    --hl-orange-bg: #1a1200;
+    --hl-orange-border: #f5a62344;
+    --hl-red-bg: #1e0d0d;
+    --hl-red-border: #e0525244;
+    --live-bg: #101a10;
+    --sec-bg: #101a10;
+    --tag-bg: #0d1520;
+  }
+  [data-theme="light"] {
+    --bg: #f8f9fa;
+    --card: #ffffff;
+    --card-border: #e5e7eb;
+    --text: #111827;
+    --text-muted: #6b7280;
+    --text-sub: #4b5563;
+    --kpi-bg: #f3f4f6;
+    --input-bg: #f3f4f6;
+    --link-bg: #f3f4f6;
+    --tab-border: #e5e7eb;
+    --hr: #e5e7eb;
+    --booking-border: #e5e7eb;
+    --card-urgent-bg: #fff5f5;
+    --card-urgent-border: #fca5a5;
+    --card-good-bg: #f0fdf4;
+    --card-good-border: #86efac;
+    --hl-green-bg: #f0fdf4;
+    --hl-green-border: #86efac;
+    --hl-orange-bg: #fffbeb;
+    --hl-orange-border: #fcd34d;
+    --hl-red-bg: #fff5f5;
+    --hl-red-border: #fca5a5;
+    --live-bg: #f0fdf4;
+    --sec-bg: #f0fdf4;
+    --tag-bg: #e0e7ff;
+  }
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:#0f1117;color:#e8eaf0;font-family:'Inter',system-ui,sans-serif;min-height:100vh;padding:20px}
+  body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-serif;min-height:100vh;padding:20px;transition:background .2s,color .2s}
   .wrap{max-width:1200px;margin:0 auto}
-  .header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap;gap:10px}
+  .header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap;gap:10px}
   .header-left{display:flex;align-items:center;gap:10px}
   .logo{width:36px;height:36px;border-radius:8px;background:#f5a623;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
   .title{font-size:20px;font-weight:700}
-  .subtitle{font-size:12px;color:#6b7280;margin-top:2px}
-  .live-badge{display:inline-flex;align-items:center;gap:5px;background:#101a10;border:1px solid #27c27b44;border-radius:6px;padding:3px 9px;font-size:11px;color:#27c27b}
+  .subtitle{font-size:12px;color:var(--text-muted);margin-top:2px}
+  .header-right{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+  .header-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+  .live-badge{display:inline-flex;align-items:center;gap:5px;background:var(--live-bg);border:1px solid #27c27b44;border-radius:6px;padding:3px 9px;font-size:11px;color:#27c27b}
   .live-dot{width:6px;height:6px;border-radius:50%;background:#27c27b;animation:pulse 2s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
   .badges{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
@@ -157,10 +222,18 @@ function renderDashboard(rezdy, stripe, speed) {
   .badge-orange{background:#f5a62322;color:#f5a623;border:1px solid #f5a62344}
   .badge-green{background:#27c27b22;color:#27c27b;border:1px solid #27c27b44}
   .badge-blue{background:#4d9fff22;color:#4d9fff;border:1px solid #4d9fff44}
-  .tabs{display:flex;gap:4px;border-bottom:1px solid #252840;margin-bottom:18px;overflow-x:auto}
-  .tab{background:transparent;color:#9ca3af;border:none;border-radius:8px 8px 0 0;padding:8px 18px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all .15s}
+  /* Date range buttons */
+  .range-btns{display:flex;gap:4px;background:var(--kpi-bg);border:1px solid var(--card-border);border-radius:8px;padding:3px}
+  .range-btn{background:transparent;border:none;border-radius:6px;padding:4px 12px;font-size:11px;font-weight:600;cursor:pointer;color:var(--text-sub);transition:all .15s}
+  .range-btn.active{background:#f5a623;color:#000}
+  .range-btn:hover:not(.active){background:var(--card);color:var(--text)}
+  /* Theme toggle */
+  .theme-btn{background:var(--kpi-bg);border:1px solid var(--card-border);border-radius:8px;padding:5px 10px;font-size:14px;cursor:pointer;color:var(--text);transition:all .15s;line-height:1}
+  .theme-btn:hover{border-color:#f5a623}
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--tab-border);margin-bottom:18px;overflow-x:auto}
+  .tab{background:transparent;color:var(--text-sub);border:none;border-radius:8px 8px 0 0;padding:8px 18px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all .15s}
   .tab.active{background:#f5a623;color:#000}
-  .tab:hover:not(.active){color:#e8eaf0}
+  .tab:hover:not(.active){color:var(--text)}
   .grid{display:grid;gap:14px}
   .grid-2{grid-template-columns:1fr 1fr}
   .grid-3{grid-template-columns:1fr 1fr 1fr}
@@ -169,43 +242,46 @@ function renderDashboard(rezdy, stripe, speed) {
   .span3{grid-column:span 3}
   .span4{grid-column:span 4}
   @media(max-width:700px){.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}.span2,.span3,.span4{grid-column:span 1}}
-  .card{background:#1a1d2e;border:1px solid #252840;border-radius:12px;padding:16px}
-  .card-urgent{background:#1e0d0d;border-color:#5a2020}
-  .card-good{background:#0d1a10;border-color:#1a4a25}
+  .card{background:var(--card);border:1px solid var(--card-border);border-radius:12px;padding:16px}
+  .card-urgent{background:var(--card-urgent-bg);border-color:var(--card-urgent-border)}
+  .card-good{background:var(--card-good-bg);border-color:var(--card-good-border)}
   .section-title{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;color:#f5a623}
   .st-red{color:#e05252}.st-blue{color:#4d9fff}.st-green{color:#27c27b}.st-purple{color:#9b6dff}
-  .kpi-box{background:#12151f;border-radius:10px;padding:14px;text-align:center;border:1px solid #252840}
+  .kpi-box{background:var(--kpi-bg);border-radius:10px;padding:14px;text-align:center;border:1px solid var(--card-border)}
   .kpi-value{font-size:26px;font-weight:800;line-height:1}
-  .kpi-label{font-size:10px;color:#9ca3af;margin-top:5px;text-transform:uppercase;letter-spacing:.5px}
+  .kpi-label{font-size:10px;color:var(--text-muted);margin-top:5px;text-transform:uppercase;letter-spacing:.5px}
   .kpi-sub{font-size:11px;margin-top:3px}
-  .kpi-trend{font-size:10px;margin-top:2px}
   .row{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:7px;gap:8px}
-  .row-label{font-size:12px;color:#9ca3af;flex-shrink:0}
+  .row-label{font-size:12px;color:var(--text-sub);flex-shrink:0}
   .row-value{font-size:12px;font-weight:600;text-align:right}
-  .booking-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #252840;gap:8px}
+  .booking-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--booking-border);gap:8px}
   .booking-row:last-child{border-bottom:none}
   .booking-name{font-size:12px;font-weight:600}
-  .booking-detail{font-size:10px;color:#6b7280;margin-top:1px}
+  .booking-detail{font-size:10px;color:var(--text-muted);margin-top:1px}
   .booking-amount{font-size:12px;font-weight:700;color:#27c27b;white-space:nowrap}
   .booking-date{font-size:10px;color:#4d9fff;white-space:nowrap}
-  .progress-bar{height:6px;border-radius:3px;background:#252840;margin-top:5px;overflow:hidden}
+  .progress-bar{height:6px;border-radius:3px;background:var(--card-border);margin-top:5px;overflow:hidden}
   .progress-fill{height:100%;border-radius:3px;transition:width .5s}
+  .split-bar{height:12px;border-radius:6px;background:var(--card-border);overflow:hidden;display:flex}
+  .split-direct{background:#27c27b;border-radius:6px 0 0 6px;transition:width .5s}
+  .split-agent{background:#f5a623;border-radius:0 6px 6px 0;flex:1}
   .highlight{border-radius:8px;padding:10px;margin-top:8px}
-  .hl-green{background:#101a10;border:1px solid #27c27b44}
-  .hl-orange{background:#1a1200;border:1px solid #f5a62344}
-  .hl-red{background:#1e0d0d;border:1px solid #e0525244}
+  .hl-green{background:var(--hl-green-bg);border:1px solid var(--hl-green-border)}
+  .hl-orange{background:var(--hl-orange-bg);border:1px solid var(--hl-orange-border)}
+  .hl-red{background:var(--hl-red-bg);border:1px solid var(--hl-red-border)}
   .hl-title{font-size:11px;font-weight:700;margin-bottom:3px}
-  .hl-text{font-size:11px;color:#e8eaf0;line-height:1.5}
+  .hl-text{font-size:11px;color:var(--text);line-height:1.5}
   .speed-ring{display:inline-flex;align-items:center;justify-content:center;width:60px;height:60px;border-radius:50%;border:3px solid;font-size:18px;font-weight:800}
-  .tag{display:inline-block;background:#0d1520;color:#4d9fff;font-family:monospace;font-size:10px;padding:2px 6px;border-radius:4px;margin:2px}
-  .phase-item{font-size:11px;color:#9ca3af;display:flex;gap:6px;margin-bottom:4px}
-  .refresh-note{font-size:10px;color:#6b7280;text-align:right;margin-bottom:8px}
-  hr{border:none;border-top:1px solid #252840;margin:10px 0}
+  .tag{display:inline-block;background:var(--tag-bg);color:#4d9fff;font-family:monospace;font-size:10px;padding:2px 6px;border-radius:4px;margin:2px}
+  .phase-item{font-size:11px;color:var(--text-sub);display:flex;gap:6px;margin-bottom:4px}
+  .refresh-note{font-size:10px;color:var(--text-muted);text-align:right;margin-bottom:8px}
+  hr{border:none;border-top:1px solid var(--hr);margin:10px 0}
   .panel{display:none}
   .panel.active{display:block}
-  .footer{margin-top:24px;text-align:center;font-size:10px;color:#6b7280}
-  .security-badge{display:inline-flex;align-items:center;gap:4px;background:#101a10;border:1px solid #27c27b44;border-radius:6px;padding:3px 8px;font-size:10px;color:#27c27b}
-  .empty-state{text-align:center;color:#6b7280;font-size:12px;padding:20px}
+  .footer{margin-top:24px;text-align:center;font-size:10px;color:var(--text-muted)}
+  .security-badge{display:inline-flex;align-items:center;gap:4px;background:var(--sec-bg);border:1px solid #27c27b44;border-radius:6px;padding:3px 8px;font-size:10px;color:#27c27b}
+  .empty-state{text-align:center;color:var(--text-muted);font-size:12px;padding:20px}
+  a{color:inherit}
 </style>
 </head>
 <body>
@@ -215,22 +291,34 @@ function renderDashboard(rezdy, stripe, speed) {
       <div class="logo">🍍</div>
       <div>
         <div class="title">Pineapple Tours</div>
-        <div class="subtitle">Live Operations Dashboard · Updated ${now}</div>
+        <div class="subtitle">Operations Dashboard · Updated ${now}</div>
       </div>
     </div>
-    <div class="badges">
-      <span class="live-badge"><span class="live-dot"></span>LIVE</span>
-      <span class="badge badge-green">Rezdy Connected</span>
-      <span class="security-badge">🔒 CF Access</span>
+    <div class="header-right">
+      <div class="header-controls">
+        <div class="badges">
+          <span class="live-badge"><span class="live-dot"></span>LIVE</span>
+          <span class="badge badge-green">Rezdy ✓</span>
+          <span class="badge badge-blue">Stripe ✓</span>
+          <span class="security-badge">🔒 CF Access</span>
+        </div>
+        <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle dark/light mode">🌙</button>
+      </div>
+      <div class="range-btns">
+        <button class="range-btn${days===1?' active':''}" onclick="setRange(1)">Today</button>
+        <button class="range-btn${days===7?' active':''}" onclick="setRange(7)">7 Days</button>
+        <button class="range-btn${days===30?' active':''}" onclick="setRange(30)">30 Days</button>
+        <button class="range-btn${days===90?' active':''}" onclick="setRange(90)">90 Days</button>
+      </div>
     </div>
   </div>
 
-  <div class="refresh-note">⟳ Auto-refreshes every 5 minutes</div>
+  <div class="refresh-note">⟳ Auto-refreshes every 5 minutes · Showing: <strong>${rng}</strong></div>
 
   <div class="tabs">
     <button class="tab active" onclick="showTab('overview',this)">Overview</button>
     <button class="tab" onclick="showTab('bookings',this)">Bookings</button>
-    <button class="tab" onclick="showTab('seo',this)">SEO & Speed</button>
+    <button class="tab" onclick="showTab('seo',this)">SEO &amp; Speed</button>
     <button class="tab" onclick="showTab('marketing',this)">Marketing</button>
     <button class="tab" onclick="showTab('tech',this)">Tech</button>
   </div>
@@ -238,27 +326,59 @@ function renderDashboard(rezdy, stripe, speed) {
   <!-- OVERVIEW -->
   <div id="panel-overview" class="panel active">
     <div class="grid">
-      <!-- Live KPIs -->
+      <!-- Live KPIs row -->
       <div class="grid grid-4">
         <div class="kpi-box">
-          <div class="kpi-value" style="color:#27c27b">${rezdy.error ? '—' : rezdy.weekBookings}</div>
-          <div class="kpi-label">Bookings This Week</div>
-          <div class="kpi-sub" style="color:${rezdy.weekCancelled > 5 ? '#e05252' : '#6b7280'}">${rezdy.error ? 'Rezdy error' : rezdy.weekCancelled + ' cancelled'}</div>
+          <div class="kpi-value" style="color:#27c27b">${rezdy.error ? '—' : rezdy.bookings}</div>
+          <div class="kpi-label">Rezdy Bookings</div>
+          <div class="kpi-sub" style="color:${(rezdy.cancelled||0) > 5 ? '#e05252' : 'var(--text-muted)'}">${rezdy.error ? 'Rezdy error' : (rezdy.cancelled||0) + ' cancelled'}</div>
         </div>
         <div class="kpi-box">
-          <div class="kpi-value" style="color:#f5a623">${stripe.error ? '—' : '$' + Number(stripe.weekRevenue).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
-          <div class="kpi-label">Stripe Revenue / Week</div>
-          <div class="kpi-sub" style="color:#6b7280">${stripe.error ? 'Stripe error' : stripe.weekCount + ' payments'}</div>
+          <div class="kpi-value" style="color:#f5a623">${rezdy.error ? '—' : '$' + Number(rezdy.revenue).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
+          <div class="kpi-label">Rezdy Revenue</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">${rezdy.error ? 'Error' : 'All channels · ' + rng}</div>
         </div>
         <div class="kpi-box">
-          <div class="kpi-value" style="color:#9b6dff">${stripe.error ? '—' : '$' + Number(stripe.mtdRevenue).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
-          <div class="kpi-label">Stripe Revenue MTD</div>
-          <div class="kpi-sub" style="color:#6b7280">${stripe.error ? '' : stripe.mtdCount + ' payments'}</div>
+          <div class="kpi-value" style="color:#9b6dff">${stripe.error ? '—' : '$' + Number(stripe.revenue).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
+          <div class="kpi-label">Stripe Revenue</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">${stripe.error ? 'Stripe error' : (stripe.count||0) + ' direct payments'}</div>
         </div>
         <div class="kpi-box">
-          <div class="kpi-value" style="color:${Number(stripe.available) < 0 ? '#e05252' : '#27c27b'}">${stripe.error ? '—' : '$' + Number(stripe.available).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
+          <div class="kpi-value" style="color:${Number(stripe.available) < 0 ? '#e05252' : '#4d9fff'}">${stripe.error ? '—' : '$' + Number(stripe.available).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
           <div class="kpi-label">Stripe Balance</div>
-          <div class="kpi-sub" style="color:#6b7280">${stripe.error ? '' : '$' + Number(stripe.pending).toLocaleString('en-AU',{maximumFractionDigits:0}) + ' pending'}</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">${stripe.error ? '' : '$' + Number(stripe.pending).toLocaleString('en-AU',{maximumFractionDigits:0}) + ' pending'}</div>
+        </div>
+      </div>
+
+      <!-- Sales Breakdown -->
+      <div class="card">
+        <div class="section-title">📊 Sales Breakdown · ${rng}</div>
+        <div class="grid grid-2">
+          <div>
+            <div class="row">
+              <span class="row-label">Direct (Stripe / Online)</span>
+              <span class="row-value" style="color:#27c27b">${stripe.error ? '—' : '$' + Number(stripe.revenue).toLocaleString('en-AU',{maximumFractionDigits:0})} <span style="color:var(--text-muted);font-weight:400">(${directPct}%)</span></span>
+            </div>
+            <div class="row">
+              <span class="row-label">Agent / Other (Rezdy total)</span>
+              <span class="row-value" style="color:#f5a623">${rezdy.error ? '—' : '$' + Number(rezdy.revenue).toLocaleString('en-AU',{maximumFractionDigits:0})}</span>
+            </div>
+            <div style="margin-top:8px;margin-bottom:4px;font-size:10px;color:var(--text-muted)">Direct vs Agent</div>
+            <div class="split-bar">
+              <div class="split-direct" style="width:${directPct}%"></div>
+              <div class="split-agent"></div>
+            </div>
+            <div style="display:flex;gap:16px;margin-top:6px">
+              <span style="font-size:10px;color:#27c27b">● Direct ${directPct}%</span>
+              <span style="font-size:10px;color:#f5a623">● Agent/Other ${agentPct}%</span>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;justify-content:center">
+            <div class="highlight hl-orange">
+              <div class="hl-title" style="color:#f5a623">🏦 Banking reconciliation</div>
+              <div class="hl-text">Stripe charges (direct) vs Rezdy total (all channels incl. agents). Full reconciliation coming soon.</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -304,11 +424,11 @@ function renderDashboard(rezdy, stripe, speed) {
           <div style="display:flex;justify-content:space-around;align-items:center;margin-bottom:14px">
             <div style="text-align:center">
               <div class="speed-ring" style="border-color:${scoreColor(speed.performance)};color:${scoreColor(speed.performance)}">${speed.performance}</div>
-              <div style="font-size:10px;color:#6b7280;margin-top:4px">Performance</div>
+              <div style="font-size:10px;color:var(--text-muted);margin-top:4px">Performance</div>
             </div>
             <div style="text-align:center">
               <div class="speed-ring" style="border-color:${scoreColor(speed.seo)};color:${scoreColor(speed.seo)}">${speed.seo}</div>
-              <div style="font-size:10px;color:#6b7280;margin-top:4px">SEO Score</div>
+              <div style="font-size:10px;color:var(--text-muted);margin-top:4px">SEO Score</div>
             </div>
           </div>
           <div class="row"><span class="row-label">LCP</span><span class="row-value">${speed.lcp}</span></div>
@@ -339,7 +459,7 @@ function renderDashboard(rezdy, stripe, speed) {
           <div class="section-title">👥 Team</div>
           <div class="row"><span class="row-label">Bookings</span><span class="row-value">India · Tyler · Sharon</span></div>
           <div class="row"><span class="row-label">SEEK hiring</span><span class="row-value" style="color:#f5a623">11 applicants</span></div>
-          <div class="row" style="margin-bottom:0"><span class="row-label">Role</span><span class="row-value">Tour Guide & Driver</span></div>
+          <div class="row" style="margin-bottom:0"><span class="row-label">Role</span><span class="row-value">Tour Guide &amp; Driver</span></div>
           <div class="highlight hl-green" style="margin-top:8px">
             <div class="hl-title" style="color:#27c27b">Disaster Assistance Grant</div>
             <div class="hl-text">Ready to sign — Emma Bloem · SBFCS</div>
@@ -348,11 +468,11 @@ function renderDashboard(rezdy, stripe, speed) {
         <div class="card">
           <div class="section-title">🔗 Quick Links</div>
           <div style="display:grid;gap:6px">
-            <a href="https://beta.rezdy.com" target="_blank" style="display:block;background:#12151f;border:1px solid #252840;border-radius:6px;padding:8px 12px;font-size:12px;color:#e8eaf0;text-decoration:none">📋 Rezdy Dashboard</a>
-            <a href="https://dashboard.stripe.com" target="_blank" style="display:block;background:#12151f;border:1px solid #252840;border-radius:6px;padding:8px 12px;font-size:12px;color:#e8eaf0;text-decoration:none">💳 Stripe Dashboard</a>
-            <a href="https://pineappletours.com.au" target="_blank" style="display:block;background:#12151f;border:1px solid #252840;border-radius:6px;padding:8px 12px;font-size:12px;color:#e8eaf0;text-decoration:none">🌐 Live Website</a>
-            <a href="https://analytics.google.com" target="_blank" style="display:block;background:#12151f;border:1px solid #252840;border-radius:6px;padding:8px 12px;font-size:12px;color:#e8eaf0;text-decoration:none">📊 GA4 Analytics</a>
-            <a href="https://search.google.com/search-console" target="_blank" style="display:block;background:#12151f;border:1px solid #252840;border-radius:6px;padding:8px 12px;font-size:12px;color:#e8eaf0;text-decoration:none">🔍 Search Console</a>
+            <a href="https://beta.rezdy.com" target="_blank" style="display:block;background:var(--link-bg);border:1px solid var(--card-border);border-radius:6px;padding:8px 12px;font-size:12px;color:var(--text);text-decoration:none">📋 Rezdy Dashboard</a>
+            <a href="https://dashboard.stripe.com" target="_blank" style="display:block;background:var(--link-bg);border:1px solid var(--card-border);border-radius:6px;padding:8px 12px;font-size:12px;color:var(--text);text-decoration:none">💳 Stripe Dashboard</a>
+            <a href="https://pineappletours.com.au" target="_blank" style="display:block;background:var(--link-bg);border:1px solid var(--card-border);border-radius:6px;padding:8px 12px;font-size:12px;color:var(--text);text-decoration:none">🌐 Live Website</a>
+            <a href="https://analytics.google.com" target="_blank" style="display:block;background:var(--link-bg);border:1px solid var(--card-border);border-radius:6px;padding:8px 12px;font-size:12px;color:var(--text);text-decoration:none">📊 GA4 Analytics</a>
+            <a href="https://search.google.com/search-console" target="_blank" style="display:block;background:var(--link-bg);border:1px solid var(--card-border);border-radius:6px;padding:8px 12px;font-size:12px;color:var(--text);text-decoration:none">🔍 Search Console</a>
           </div>
         </div>
       </div>
@@ -364,24 +484,24 @@ function renderDashboard(rezdy, stripe, speed) {
     <div class="grid">
       <div class="grid grid-4">
         <div class="kpi-box">
-          <div class="kpi-value" style="color:#27c27b">${rezdy.error ? '—' : rezdy.weekBookings}</div>
-          <div class="kpi-label">Rezdy Confirmed / Week</div>
-          <div class="kpi-sub" style="color:#6b7280">${rezdy.error ? '' : rezdy.weekCancelled + ' cancelled'}</div>
+          <div class="kpi-value" style="color:#27c27b">${rezdy.error ? '—' : rezdy.bookings}</div>
+          <div class="kpi-label">Rezdy Confirmed</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">${rezdy.error ? '' : (rezdy.cancelled||0) + ' cancelled · ' + rng}</div>
         </div>
         <div class="kpi-box">
-          <div class="kpi-value" style="color:#f5a623">${stripe.error ? '—' : '$'+Number(stripe.weekRevenue).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
-          <div class="kpi-label">Stripe Revenue / Week</div>
-          <div class="kpi-sub" style="color:#6b7280">${stripe.error ? '' : stripe.weekCount + ' payments'}</div>
+          <div class="kpi-value" style="color:#f5a623">${rezdy.error ? '—' : '$'+Number(rezdy.revenue).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
+          <div class="kpi-label">Rezdy Revenue</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">${rezdy.error ? '' : 'All channels · ' + rng}</div>
         </div>
         <div class="kpi-box">
-          <div class="kpi-value" style="color:#9b6dff">${stripe.error ? '—' : '$'+Number(stripe.mtdRevenue).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
-          <div class="kpi-label">Stripe Revenue MTD</div>
-          <div class="kpi-sub" style="color:#6b7280">${stripe.error ? '' : stripe.mtdCount + ' payments'}</div>
+          <div class="kpi-value" style="color:#9b6dff">${stripe.error ? '—' : '$'+Number(stripe.revenue).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
+          <div class="kpi-label">Stripe Direct</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">${stripe.error ? '' : (stripe.count||0) + ' payments · ' + rng}</div>
         </div>
         <div class="kpi-box">
           <div class="kpi-value" style="color:${Number(stripe.available) < 0 ? '#e05252' : '#4d9fff'}">${stripe.error ? '—' : '$'+Number(stripe.available).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
           <div class="kpi-label">Stripe Available</div>
-          <div class="kpi-sub" style="color:#6b7280">${stripe.error ? '' : '$'+Number(stripe.pending).toLocaleString('en-AU',{maximumFractionDigits:0}) + ' pending'}</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">${stripe.error ? '' : '$'+Number(stripe.pending).toLocaleString('en-AU',{maximumFractionDigits:0}) + ' pending'}</div>
         </div>
       </div>
 
@@ -407,7 +527,7 @@ function renderDashboard(rezdy, stripe, speed) {
           <div class="section-title">⚙️ Platform Status</div>
           <div class="row"><span class="row-label">Rezdy</span><span class="badge badge-green">✓ Live</span></div>
           <div class="row"><span class="row-label">Stripe</span><span class="badge badge-green">✓ Live</span></div>
-          <div class="row"><span class="row-label">GA4</span><span class="badge badge-orange">G-Z2VHW54MFW · OAuth needed</span></div>
+          <div class="row"><span class="row-label">GA4</span><span class="badge badge-orange">Connect GA4</span></div>
           <div class="row"><span class="row-label">Cart recovery</span><span class="badge badge-green">✓ 15m/24h/72h</span></div>
           <div class="row"><span class="row-label">Email (Resend)</span><span class="badge badge-green">✓ Live</span></div>
           <hr>
@@ -436,22 +556,22 @@ function renderDashboard(rezdy, stripe, speed) {
         <div class="kpi-box">
           <div class="kpi-value" style="color:${scoreColor(speed.performance)}">${speed.performance}</div>
           <div class="kpi-label">Performance (Mobile)</div>
-          <div class="kpi-sub" style="color:#6b7280">PageSpeed Insights</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">PageSpeed Insights</div>
         </div>
         <div class="kpi-box">
           <div class="kpi-value" style="color:${scoreColor(speed.seo)}">${speed.seo}</div>
           <div class="kpi-label">SEO Score</div>
-          <div class="kpi-sub" style="color:#6b7280">PageSpeed Insights</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">PageSpeed Insights</div>
         </div>
         <div class="kpi-box">
-          <div class="kpi-value" style="color:#6b7280">—</div>
+          <div class="kpi-value" style="color:var(--text-muted)">—</div>
           <div class="kpi-label">Avg Position</div>
-          <div class="kpi-sub" style="color:#6b7280">Connect GSC</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">Connect GSC</div>
         </div>
         <div class="kpi-box">
-          <div class="kpi-value" style="color:#6b7280">—</div>
+          <div class="kpi-value" style="color:var(--text-muted)">—</div>
           <div class="kpi-label">Organic Clicks/wk</div>
-          <div class="kpi-sub" style="color:#6b7280">Connect GSC</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">Connect GSC</div>
         </div>
       </div>
 
@@ -553,7 +673,7 @@ function renderDashboard(rezdy, stripe, speed) {
         <div class="row"><span class="row-label">CDN</span><span class="row-value">Cloudflare</span></div>
         <div class="row"><span class="row-label">Payments</span><span class="row-value">Stripe (live)</span></div>
         <div class="row"><span class="row-label">Bookings</span><span class="row-value" style="color:#27c27b">Rezdy ✓ Connected</span></div>
-        <div class="row"><span class="row-label">Analytics</span><span class="row-value">GA4 + GTM</span></div>
+        <div class="row"><span class="row-label">Analytics</span><span class="row-value">GA4 · Connect GA4</span></div>
         <div class="row"><span class="row-label">Email</span><span class="row-value">Resend</span></div>
         <div class="row"><span class="row-label">Dashboard</span><span class="row-value">CF Workers · Edge</span></div>
         <div class="row" style="margin-bottom:0"><span class="row-label">Agent</span><span class="row-value">OpenClaw · POS 🍍</span></div>
@@ -569,12 +689,40 @@ function renderDashboard(rezdy, stripe, speed) {
   <div class="footer">Pineapple Tours · dashboard.pineappletours.com.au · CF Access · 🍍 POS · <a href="https://dash.p2a.au" style="color:#9b6dff;text-decoration:none">→ P2A Command</a></div>
 </div>
 <script>
+// Tab switching
 function showTab(name,el){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.getElementById('panel-'+name).classList.add('active');
   el.classList.add('active');
 }
+
+// Date range
+function setRange(days){
+  const u = new URL(location.href);
+  u.searchParams.set('range', days);
+  location.href = u.toString();
+}
+
+// Theme toggle
+function toggleTheme(){
+  const html = document.documentElement;
+  const isDark = html.getAttribute('data-theme') === 'dark';
+  const newTheme = isDark ? 'light' : 'dark';
+  html.setAttribute('data-theme', newTheme);
+  localStorage.setItem('pt_theme', newTheme);
+  document.getElementById('themeBtn').textContent = newTheme === 'dark' ? '🌙' : '☀️';
+}
+
+// Apply saved theme on load
+(function(){
+  const saved = localStorage.getItem('pt_theme');
+  if (saved && saved !== document.documentElement.getAttribute('data-theme')) {
+    document.documentElement.setAttribute('data-theme', saved);
+    const btn = document.getElementById('themeBtn');
+    if (btn) btn.textContent = saved === 'dark' ? '🌙' : '☀️';
+  }
+})();
 </script>
 </body>
 </html>`;
@@ -600,14 +748,19 @@ export default {
       return new Response(LOGIN_PAGE(""), {headers:{"Content-Type":"text/html"}});
     }
 
+    // Parse date range from query param (default 7 days)
+    const url = new URL(request.url);
+    const rangeParam = url.searchParams.get('range');
+    const days = [1, 7, 30, 90].includes(parseInt(rangeParam)) ? parseInt(rangeParam) : 7;
+
     // Fetch live data in parallel
     const [rezdy, stripe, speed] = await Promise.all([
-      getRezdyData(env.REZDY_API_KEY),
-      getStripeData(env.STRIPE_SECRET_KEY),
+      getRezdyData(env.REZDY_API_KEY, days),
+      getStripeData(env.STRIPE_SECRET_KEY, days),
       getPageSpeed()
     ]);
 
-    return new Response(renderDashboard(rezdy, stripe, speed), {
+    return new Response(renderDashboard(rezdy, stripe, speed, days), {
       headers:{
         "Content-Type":"text/html",
         "X-Frame-Options":"DENY",
