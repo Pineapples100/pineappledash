@@ -31,6 +31,35 @@ async function validateCFAccessJWT(request) {
   } catch(e) { return false; }
 }
 
+// Fetch live Stripe data
+async function getStripeData(apiKey) {
+  try {
+    const now = Math.floor(Date.now()/1000);
+    const weekAgo = now - 7*24*60*60;
+    const monthStart = Math.floor(new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime()/1000);
+
+    const headers = { 'Authorization': 'Basic ' + btoa(apiKey + ':') };
+
+    const [weekRes, mtdRes, balanceRes] = await Promise.all([
+      fetch(`https://api.stripe.com/v1/charges?created[gte]=${weekAgo}&limit=100`, {headers}),
+      fetch(`https://api.stripe.com/v1/charges?created[gte]=${monthStart}&limit=100`, {headers}),
+      fetch('https://api.stripe.com/v1/balance', {headers})
+    ]);
+
+    const [weekData, mtdData, balData] = await Promise.all([weekRes.json(), mtdRes.json(), balanceRes.json()]);
+
+    const weekCharges = (weekData.data||[]).filter(c => c.paid && !c.refunded);
+    const mtdCharges = (mtdData.data||[]).filter(c => c.paid && !c.refunded);
+    const weekRevenue = weekCharges.reduce((s,c) => s + c.amount, 0) / 100;
+    const mtdRevenue = mtdCharges.reduce((s,c) => s + c.amount, 0) / 100;
+
+    const available = (balData.available||[]).find(b => b.currency==='aud')?.amount/100 || 0;
+    const pending = (balData.pending||[]).find(b => b.currency==='aud')?.amount/100 || 0;
+
+    return { weekRevenue: weekRevenue.toFixed(2), weekCount: weekCharges.length, mtdRevenue: mtdRevenue.toFixed(2), mtdCount: mtdCharges.length, available: available.toFixed(2), pending: pending.toFixed(2) };
+  } catch(e) { return { error: e.message }; }
+}
+
 // Fetch live Rezdy data
 async function getRezdyData(apiKey) {
   try {
@@ -101,7 +130,7 @@ function scoreColor(n) {
   return '#e05252';
 }
 
-function renderDashboard(rezdy, speed) {
+function renderDashboard(rezdy, stripe, speed) {
   const now = new Date().toLocaleString('en-AU', {timeZone:'Australia/Brisbane',dateStyle:'medium',timeStyle:'short'});
   return `<!DOCTYPE html>
 <html lang="en">
@@ -214,22 +243,22 @@ function renderDashboard(rezdy, speed) {
         <div class="kpi-box">
           <div class="kpi-value" style="color:#27c27b">${rezdy.error ? '—' : rezdy.weekBookings}</div>
           <div class="kpi-label">Bookings This Week</div>
-          <div class="kpi-sub" style="color:#27c27b">${rezdy.error ? 'API error' : rezdy.weekCancelled + ' cancelled'}</div>
+          <div class="kpi-sub" style="color:${rezdy.weekCancelled > 5 ? '#e05252' : '#6b7280'}">${rezdy.error ? 'Rezdy error' : rezdy.weekCancelled + ' cancelled'}</div>
         </div>
         <div class="kpi-box">
-          <div class="kpi-value" style="color:#f5a623">${rezdy.error ? '—' : '$' + Number(rezdy.weekRevenue).toLocaleString('en-AU',{minimumFractionDigits:0,maximumFractionDigits:0})}</div>
-          <div class="kpi-label">Revenue This Week</div>
-          <div class="kpi-sub" style="color:#6b7280">Rezdy confirmed</div>
+          <div class="kpi-value" style="color:#f5a623">${stripe.error ? '—' : '$' + Number(stripe.weekRevenue).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
+          <div class="kpi-label">Stripe Revenue / Week</div>
+          <div class="kpi-sub" style="color:#6b7280">${stripe.error ? 'Stripe error' : stripe.weekCount + ' payments'}</div>
         </div>
         <div class="kpi-box">
-          <div class="kpi-value" style="color:#4d9fff">${rezdy.error ? '—' : rezdy.mtdBookings}</div>
-          <div class="kpi-label">Bookings MTD</div>
-          <div class="kpi-sub" style="color:#6b7280">Confirmed only</div>
+          <div class="kpi-value" style="color:#9b6dff">${stripe.error ? '—' : '$' + Number(stripe.mtdRevenue).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
+          <div class="kpi-label">Stripe Revenue MTD</div>
+          <div class="kpi-sub" style="color:#6b7280">${stripe.error ? '' : stripe.mtdCount + ' payments'}</div>
         </div>
         <div class="kpi-box">
-          <div class="kpi-value" style="color:#9b6dff">${rezdy.error ? '—' : '$' + Number(rezdy.mtdRevenue).toLocaleString('en-AU',{minimumFractionDigits:0,maximumFractionDigits:0})}</div>
-          <div class="kpi-label">Revenue MTD</div>
-          <div class="kpi-sub" style="color:#6b7280">Rezdy confirmed</div>
+          <div class="kpi-value" style="color:${Number(stripe.available) < 0 ? '#e05252' : '#27c27b'}">${stripe.error ? '—' : '$' + Number(stripe.available).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
+          <div class="kpi-label">Stripe Balance</div>
+          <div class="kpi-sub" style="color:#6b7280">${stripe.error ? '' : '$' + Number(stripe.pending).toLocaleString('en-AU',{maximumFractionDigits:0}) + ' pending'}</div>
         </div>
       </div>
 
@@ -336,19 +365,23 @@ function renderDashboard(rezdy, speed) {
       <div class="grid grid-4">
         <div class="kpi-box">
           <div class="kpi-value" style="color:#27c27b">${rezdy.error ? '—' : rezdy.weekBookings}</div>
-          <div class="kpi-label">Confirmed This Week</div>
+          <div class="kpi-label">Rezdy Confirmed / Week</div>
+          <div class="kpi-sub" style="color:#6b7280">${rezdy.error ? '' : rezdy.weekCancelled + ' cancelled'}</div>
         </div>
         <div class="kpi-box">
-          <div class="kpi-value" style="color:#e05252">${rezdy.error ? '—' : rezdy.weekCancelled}</div>
-          <div class="kpi-label">Cancelled This Week</div>
+          <div class="kpi-value" style="color:#f5a623">${stripe.error ? '—' : '$'+Number(stripe.weekRevenue).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
+          <div class="kpi-label">Stripe Revenue / Week</div>
+          <div class="kpi-sub" style="color:#6b7280">${stripe.error ? '' : stripe.weekCount + ' payments'}</div>
         </div>
         <div class="kpi-box">
-          <div class="kpi-value" style="color:#f5a623">${rezdy.error ? '—' : '$'+Number(rezdy.weekRevenue).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
-          <div class="kpi-label">Week Revenue</div>
+          <div class="kpi-value" style="color:#9b6dff">${stripe.error ? '—' : '$'+Number(stripe.mtdRevenue).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
+          <div class="kpi-label">Stripe Revenue MTD</div>
+          <div class="kpi-sub" style="color:#6b7280">${stripe.error ? '' : stripe.mtdCount + ' payments'}</div>
         </div>
         <div class="kpi-box">
-          <div class="kpi-value" style="color:#9b6dff">${rezdy.error ? '—' : '$'+Number(rezdy.mtdRevenue).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
-          <div class="kpi-label">MTD Revenue</div>
+          <div class="kpi-value" style="color:${Number(stripe.available) < 0 ? '#e05252' : '#4d9fff'}">${stripe.error ? '—' : '$'+Number(stripe.available).toLocaleString('en-AU',{maximumFractionDigits:0})}</div>
+          <div class="kpi-label">Stripe Available</div>
+          <div class="kpi-sub" style="color:#6b7280">${stripe.error ? '' : '$'+Number(stripe.pending).toLocaleString('en-AU',{maximumFractionDigits:0}) + ' pending'}</div>
         </div>
       </div>
 
@@ -372,8 +405,9 @@ function renderDashboard(rezdy, speed) {
         </div>
         <div class="card">
           <div class="section-title">⚙️ Platform Status</div>
-          <div class="row"><span class="row-label">Rezdy</span><span class="badge badge-green">✓ Connected</span></div>
-          <div class="row"><span class="row-label">Stripe</span><span class="badge badge-orange">Connect secret key</span></div>
+          <div class="row"><span class="row-label">Rezdy</span><span class="badge badge-green">✓ Live</span></div>
+          <div class="row"><span class="row-label">Stripe</span><span class="badge badge-green">✓ Live</span></div>
+          <div class="row"><span class="row-label">GA4</span><span class="badge badge-orange">G-Z2VHW54MFW · OAuth needed</span></div>
           <div class="row"><span class="row-label">Cart recovery</span><span class="badge badge-green">✓ 15m/24h/72h</span></div>
           <div class="row"><span class="row-label">Email (Resend)</span><span class="badge badge-green">✓ Live</span></div>
           <hr>
@@ -567,12 +601,13 @@ export default {
     }
 
     // Fetch live data in parallel
-    const [rezdy, speed] = await Promise.all([
+    const [rezdy, stripe, speed] = await Promise.all([
       getRezdyData(env.REZDY_API_KEY),
+      getStripeData(env.STRIPE_SECRET_KEY),
       getPageSpeed()
     ]);
 
-    return new Response(renderDashboard(rezdy, speed), {
+    return new Response(renderDashboard(rezdy, stripe, speed), {
       headers:{
         "Content-Type":"text/html",
         "X-Frame-Options":"DENY",
