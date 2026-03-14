@@ -401,6 +401,23 @@ function renderDashboard(rezdy, stripe, ga4, speed, days) {
   .security-badge{display:inline-flex;align-items:center;gap:4px;background:var(--sec-bg);border:1px solid #27c27b44;border-radius:6px;padding:3px 8px;font-size:10px;color:#27c27b}
   .empty-state{text-align:center;color:var(--text-muted);font-size:12px;padding:20px}
   a{color:inherit}
+  /* Status system */
+  .status-counter{font-size:11px;color:var(--text-muted);margin-top:4px}
+  .status-counter .s-urgent{color:#e05252;font-weight:700}
+  .status-counter .s-done{color:#27c27b;font-weight:700}
+  .status-counter .s-ignored{color:var(--text-muted);font-weight:700}
+  .si{cursor:pointer;user-select:none;transition:all .15s;border-radius:8px;padding:3px 6px 3px 3px;display:flex;align-items:center;gap:6px}
+  .si:hover{background:var(--kpi-bg)}
+  .si[data-status="urgent"]{border:1px solid #e05252;background:var(--hl-red-bg);font-weight:700}
+  .si[data-status="done"]{opacity:.5;text-decoration:line-through}
+  .si[data-status="ignored"]{opacity:.3}
+  .si-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;display:inline-block}
+  .si[data-status="pending"] .si-dot{background:#6b7280}
+  .si[data-status="urgent"] .si-dot{background:#e05252;animation:pulse 1s infinite}
+  .si[data-status="done"] .si-dot{background:transparent;width:auto;height:auto}
+  .si[data-status="done"] .si-dot::before{content:"✅";font-size:10px}
+  .si[data-status="ignored"] .si-dot{background:#6b7280}
+  .si-done-dot::before{content:"✅";font-size:10px}
 </style>
 </head>
 <body>
@@ -411,6 +428,7 @@ function renderDashboard(rezdy, stripe, ga4, speed, days) {
       <div>
         <div class="title">Pineapple Tours</div>
         <div class="subtitle">Operations Dashboard · Updated ${now}</div>
+        <div class="status-counter" id="statusCounter">Loading…</div>
       </div>
     </div>
     <div class="header-right">
@@ -546,16 +564,19 @@ function renderDashboard(rezdy, stripe, ga4, speed, days) {
 
         <!-- Escalations -->
         <div class="card card-urgent">
-          <div class="section-title st-red">🔴 Escalations</div>
-          <div class="booking-row">
+          <div class="section-title st-red">🔴 Escalations <span style="font-weight:400;font-size:9px;letter-spacing:0;text-transform:none;color:var(--text-muted)">(click to update status)</span></div>
+          <div class="si booking-row" data-id="esc-ats-pacific" data-status="pending" onclick="cycleStatus(this)">
+            <span class="si-dot"></span>
             <div><div class="booking-name">ATS Pacific / Frohwerk</div><div class="booking-detail">HOHO + Glow Worm · 15 Apr · TSTFRJ6485</div></div>
             <span class="badge badge-red">UNANSWERED</span>
           </div>
-          <div class="booking-row">
+          <div class="si booking-row" data-id="esc-maddison-atia" data-status="pending" onclick="cycleStatus(this)">
+            <span class="si-dot"></span>
             <div><div class="booking-name">Maddison Staader (ATIA)</div><div class="booking-detail">50-pax Canungra · 28 Aug · ~$8,250</div></div>
             <span class="badge badge-red">NEEDS TIMES</span>
           </div>
-          <div class="booking-row">
+          <div class="si booking-row" data-id="esc-inside-australia" data-status="pending" onclick="cycleStatus(this)">
+            <span class="si-dot"></span>
             <div><div class="booking-name">Inside Australia Travel</div><div class="booking-detail">Bos party · 5 Apr · PTQVVF7Y</div></div>
             <span class="badge badge-orange">PREPAY DUE</span>
           </div>
@@ -589,13 +610,26 @@ function renderDashboard(rezdy, stripe, ga4, speed, days) {
       <div class="grid grid-3">
         <div class="card">
           <div class="section-title">💰 Finance Alerts</div>
-          <div class="highlight hl-red">
-            <div class="hl-title" style="color:#e05252">Tamborine Intl Invoice</div>
-            <div class="hl-text">$440 OVERDUE · HEN4901 · Was due 6 Mar</div>
+          <div class="si highlight hl-red" data-id="finance-tamborine-invoice" data-status="pending" onclick="cycleStatus(this)" style="cursor:pointer">
+            <span class="si-dot"></span>
+            <div>
+              <div class="hl-title" style="color:#e05252">Tamborine Intl Invoice</div>
+              <div class="hl-text">$440 OVERDUE · HEN4901 · Was due 6 Mar</div>
+            </div>
           </div>
-          <div class="highlight hl-orange" style="margin-top:8px">
-            <div class="hl-title" style="color:#f5a623">Westpac Dispute</div>
-            <div class="hl-text">CS138010101 · Follow up required</div>
+          <div class="si highlight hl-orange" data-id="finance-westpac" data-status="pending" onclick="cycleStatus(this)" style="cursor:pointer;margin-top:8px">
+            <span class="si-dot"></span>
+            <div>
+              <div class="hl-title" style="color:#f5a623">Westpac Dispute</div>
+              <div class="hl-text">CS138010101 · Follow up required</div>
+            </div>
+          </div>
+          <div class="si highlight hl-green" data-id="finance-disaster-grant" data-status="pending" onclick="cycleStatus(this)" style="cursor:pointer;margin-top:8px">
+            <span class="si-dot"></span>
+            <div>
+              <div class="hl-title" style="color:#27c27b">Disaster Assistance Grant</div>
+              <div class="hl-text">Ready to sign — Emma Bloem · SBFCS</div>
+            </div>
           </div>
         </div>
         <div class="card">
@@ -603,10 +637,6 @@ function renderDashboard(rezdy, stripe, ga4, speed, days) {
           <div class="row"><span class="row-label">Bookings</span><span class="row-value">India · Tyler · Sharon</span></div>
           <div class="row"><span class="row-label">SEEK hiring</span><span class="row-value" style="color:#f5a623">11 applicants</span></div>
           <div class="row" style="margin-bottom:0"><span class="row-label">Role</span><span class="row-value">Tour Guide &amp; Driver</span></div>
-          <div class="highlight hl-green" style="margin-top:8px">
-            <div class="hl-title" style="color:#27c27b">Disaster Assistance Grant</div>
-            <div class="hl-text">Ready to sign — Emma Bloem · SBFCS</div>
-          </div>
         </div>
         <div class="card">
           <div class="section-title">🔗 Quick Links</div>
@@ -675,17 +705,25 @@ function renderDashboard(rezdy, stripe, ga4, speed, days) {
           <div class="row"><span class="row-label">Email (Resend)</span><span class="badge badge-green">✓ Live</span></div>
           <hr>
           <div class="section-title" style="margin-top:4px">🚨 Escalations</div>
-          <div class="booking-row">
+          <div class="si booking-row" data-id="esc-ats-pacific" data-status="pending" onclick="cycleStatus(this)">
+            <span class="si-dot"></span>
             <div><div class="booking-name">ATS Pacific / Frohwerk</div><div class="booking-detail">HOHO + Glow Worm · 15 Apr · TSTFRJ6485</div></div>
             <span class="badge badge-red">UNANSWERED</span>
           </div>
-          <div class="booking-row">
+          <div class="si booking-row" data-id="esc-maddison-atia" data-status="pending" onclick="cycleStatus(this)">
+            <span class="si-dot"></span>
             <div><div class="booking-name">Maddison Staader (ATIA)</div><div class="booking-detail">50-pax Canungra · 28 Aug · ~$8,250</div></div>
             <span class="badge badge-red">NEEDS TIMES</span>
           </div>
-          <div class="booking-row">
+          <div class="si booking-row" data-id="esc-inside-australia" data-status="pending" onclick="cycleStatus(this)">
+            <span class="si-dot"></span>
             <div><div class="booking-name">Inside Australia Travel</div><div class="booking-detail">Bos party · 5 Apr · PTQVVF7Y</div></div>
             <span class="badge badge-orange">PREPAY DUE</span>
+          </div>
+          <div class="si booking-row" data-id="booking-joshua-maas" data-status="pending" onclick="cycleStatus(this)">
+            <span class="si-dot"></span>
+            <div><div class="booking-name">Joshua Maas</div><div class="booking-detail">Wedding transfer · action required</div></div>
+            <span class="badge badge-orange">WEDDING TRANSFER</span>
           </div>
         </div>
       </div>
@@ -781,10 +819,14 @@ function renderDashboard(rezdy, stripe, ga4, speed, days) {
           <div class="phase-item"><span style="color:#27c27b">✓</span>Sitemap at /sitemap_index.xml</div>
           <div class="phase-item"><span style="color:#27c27b">✓</span>robots.txt configured</div>
           <div class="phase-item"><span style="color:#27c27b">✓</span>HTTPS · Cloudflare CDN</div>
-          <div class="phase-item"><span style="color:#e05252">○</span>Schema markup on tour pages</div>
-          <div class="phase-item"><span style="color:#e05252">○</span>FAQ schema on money pages</div>
-          <div class="phase-item"><span style="color:#e05252">○</span>Image optimisation</div>
-          <div class="phase-item"><span style="color:#e05252">○</span>Book Now popup → trackable URLs</div>
+          <div class="si phase-item" data-id="seo-schema-markup" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span>Schema markup on tour pages</div>
+          <div class="si phase-item" data-id="seo-faq-schema" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span>FAQ schema on money pages</div>
+          <div class="si phase-item" data-id="seo-entity-consistency" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span>Entity consistency</div>
+          <div class="si phase-item" data-id="seo-core-web-vitals" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span>Core Web Vitals audit</div>
+          <div class="si phase-item" data-id="seo-duplicate-meta" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span>Duplicate title/meta check</div>
+          <div class="si phase-item" data-id="seo-internal-links" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span>Internal linking audit</div>
+          <div class="si phase-item" data-id="seo-image-optimisation" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span>Image optimisation</div>
+          <div class="si phase-item" data-id="seo-booking-urls" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span>Book Now popup → trackable URLs</div>
         </div>
         <div class="card">
           <div class="section-title">🎯 Keyword Targets</div>
@@ -815,33 +857,161 @@ function renderDashboard(rezdy, stripe, ga4, speed, days) {
 
   <!-- MARKETING -->
   <div id="panel-marketing" class="panel">
-    <div class="grid grid-2">
-      <div class="card">
-        <div class="section-title">📡 Tracking Events</div>
-        <span class="tag">pt_view_tour</span><span class="tag">pt_start_checkout</span>
-        <span class="tag">pt_payment_attempt</span><span class="tag">pt_payment_succeeded</span>
-        <span class="tag">pt_payment_failed</span><span class="tag">pt_booking_confirmed</span>
-        <span class="tag">pt_checkout_idle_15m</span><span class="tag">pt_checkout_abandoned_60m</span>
-        <span class="tag">pt_phone_click</span><span class="tag">pt_whatsapp_click</span>
-        <hr>
-        <div class="section-title" style="margin-top:4px">🛒 Cart Recovery</div>
-        <div class="row"><span class="row-label">15 min</span><span class="row-value" style="color:#4d9fff">Email/SMS #1</span></div>
-        <div class="row"><span class="row-label">24 hr</span><span class="row-value" style="color:#4d9fff">Email #2 + support CTA</span></div>
-        <div class="row" style="margin-bottom:0"><span class="row-label">72 hr</span><span class="row-value" style="color:#9b6dff">Final + incentive option</span></div>
+    <div class="grid">
+      <!-- GA4 Live KPIs -->
+      <div class="grid grid-4">
+        <div class="kpi-box">
+          <div class="kpi-value" style="color:#4d9fff">${ga4.error ? '—' : (ga4.totals.sessions ?? 0).toLocaleString()}</div>
+          <div class="kpi-label">Total Sessions</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">${ga4.error ? 'GA4 error' : rng}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="kpi-value" style="color:#27c27b">${ga4.error ? '—' : (ga4.organicSearch.sessions ?? 0).toLocaleString()}</div>
+          <div class="kpi-label">Organic Sessions</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">${ga4.error ? '' : 'Google organic · ' + rng}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="kpi-value" style="color:#9b6dff">${ga4.error ? '—' : (ga4.paidSocial.sessions ?? 0).toLocaleString()}</div>
+          <div class="kpi-label">Paid Social Sessions</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">${ga4.error ? '' : 'Meta / social ads · ' + rng}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="kpi-value" style="color:#f5a623">${ga4.error ? '—' : (ga4.direct.sessions ?? 0).toLocaleString()}</div>
+          <div class="kpi-label">Direct Sessions</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">${ga4.error ? '' : 'Direct traffic · ' + rng}</div>
+        </div>
       </div>
+
+      <!-- Channel Breakdown + Device Split -->
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="section-title st-green">📊 Channel Breakdown · ${rng}</div>
+          ${ga4.error
+            ? '<div class="empty-state">GA4 error: ' + ga4.error + '</div>'
+            : ga4.channels && ga4.channels.length > 0
+              ? (() => {
+                  const totalSess = ga4.channels.reduce((s,c) => s+c.sessions, 0) || 1;
+                  const maxSess = Math.max(...ga4.channels.map(c => c.sessions), 1);
+                  return ga4.channels
+                    .sort((a,b) => b.sessions - a.sessions)
+                    .map(c => {
+                      const isOrganic = c.channel === 'Organic Search';
+                      const isPaidSearch = c.channel === 'Paid Search';
+                      const isPaidSocial = c.channel === 'Paid Social';
+                      const isDirect = c.channel === 'Direct';
+                      const color = isOrganic ? '#27c27b' : isPaidSearch ? '#4d9fff' : isPaidSocial ? '#9b6dff' : isDirect ? '#f5a623' : '#6b7280';
+                      const pct = Math.round((c.sessions / maxSess) * 100);
+                      const sharePct = Math.round((c.sessions / totalSess) * 100);
+                      return '<div style="margin-bottom:10px">'
+                        + '<div style="display:flex;justify-content:space-between;margin-bottom:3px">'
+                        + '<span style="font-size:12px;color:' + color + ';font-weight:' + (isOrganic?'700':'400') + '">' + c.channel + '</span>'
+                        + '<span style="font-size:12px;font-weight:600">' + c.sessions.toLocaleString() + ' <span style="color:var(--text-muted);font-weight:400">(' + sharePct + '%)</span></span>'
+                        + '</div>'
+                        + '<div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%;background:' + color + '"></div></div>'
+                        + '</div>';
+                    }).join('')
+                })()
+              : '<div class="empty-state">No channel data available</div>'
+          }
+        </div>
+        <div class="card">
+          <div class="section-title st-blue">📱 Device Split · ${rng}</div>
+          ${ga4.error
+            ? '<div class="empty-state">GA4 error: ' + ga4.error + '</div>'
+            : (() => {
+                const total = ga4.totalDevSessions || 1;
+                const devMap = {};
+                (ga4.devices||[]).forEach(d => { devMap[d.device] = d.sessions; });
+                const mobile = devMap['mobile'] || 0;
+                const desktop = devMap['desktop'] || 0;
+                const tablet = devMap['tablet'] || 0;
+                const mobilePct = Math.round(mobile/total*100);
+                const desktopPct = Math.round(desktop/total*100);
+                const tabletPct = Math.round(tablet/total*100);
+                return '<div style="margin-bottom:14px">'
+                  + '<div style="display:flex;justify-content:space-between;margin-bottom:3px">'
+                  + '<span style="font-size:12px;color:#f5a623">📱 Mobile</span>'
+                  + '<span style="font-size:12px;font-weight:700">' + mobilePct + '%</span>'
+                  + '</div>'
+                  + '<div class="progress-bar"><div class="progress-fill" style="width:' + mobilePct + '%;background:#f5a623"></div></div>'
+                  + '<div style="font-size:10px;color:var(--text-muted);margin-top:2px">' + mobile.toLocaleString() + ' sessions</div>'
+                  + '</div>'
+                  + '<div style="margin-bottom:14px">'
+                  + '<div style="display:flex;justify-content:space-between;margin-bottom:3px">'
+                  + '<span style="font-size:12px;color:#4d9fff">🖥️ Desktop</span>'
+                  + '<span style="font-size:12px;font-weight:700">' + desktopPct + '%</span>'
+                  + '</div>'
+                  + '<div class="progress-bar"><div class="progress-fill" style="width:' + desktopPct + '%;background:#4d9fff"></div></div>'
+                  + '<div style="font-size:10px;color:var(--text-muted);margin-top:2px">' + desktop.toLocaleString() + ' sessions</div>'
+                  + '</div>'
+                  + '<div>'
+                  + '<div style="display:flex;justify-content:space-between;margin-bottom:3px">'
+                  + '<span style="font-size:12px;color:#9b6dff">⬜ Tablet</span>'
+                  + '<span style="font-size:12px;font-weight:700">' + tabletPct + '%</span>'
+                  + '</div>'
+                  + '<div class="progress-bar"><div class="progress-fill" style="width:' + tabletPct + '%;background:#9b6dff"></div></div>'
+                  + '<div style="font-size:10px;color:var(--text-muted);margin-top:2px">' + tablet.toLocaleString() + ' sessions</div>'
+                  + '</div>';
+              })()
+          }
+        </div>
+      </div>
+
+      <!-- Top Landing Pages -->
       <div class="card">
-        <div class="section-title">🎯 Channels</div>
-        <div class="row"><span class="row-label">Google Ads</span><span class="badge badge-orange">Setup needed</span></div>
-        <div class="row"><span class="row-label">Meta Ads</span><span class="badge badge-orange">Setup needed</span></div>
-        <div class="row"><span class="row-label">Google Business Profile</span><span class="badge badge-orange">Optimise</span></div>
-        <div class="row"><span class="row-label">Instagram</span><span class="badge badge-blue">Active</span></div>
-        <div class="row"><span class="row-label">Facebook</span><span class="badge badge-blue">Active</span></div>
-        <div class="row"><span class="row-label">Email (Resend)</span><span class="badge badge-green">Live</span></div>
-        <hr>
-        <div class="section-title" style="margin-top:4px">🗓️ Weekly Rhythm</div>
-        <div class="row"><span class="row-label">Monday</span><span class="row-value">KPI + Incidents</span></div>
-        <div class="row"><span class="row-label">Wednesday</span><span class="row-value">Experiments + Release</span></div>
-        <div class="row" style="margin-bottom:0"><span class="row-label">Friday</span><span class="row-value">Security + Backlog</span></div>
+        <div class="section-title st-blue">📄 Top Landing Pages · ${rng}</div>
+        ${ga4.error
+          ? `<div class="empty-state">GA4 error: ${ga4.error}</div>`
+          : ga4.pages && ga4.pages.length > 0
+            ? (() => {
+                const maxSess = Math.max(...ga4.pages.map(p => p.sessions), 1);
+                const totalSess = ga4.pages.reduce((s,p) => s+p.sessions, 0) || 1;
+                return `<div class="grid grid-2">` + ga4.pages.slice(0,8).map(p => {
+                  const pct = Math.round((p.sessions / maxSess) * 100);
+                  const sharePct = Math.round((p.sessions / totalSess) * 100);
+                  const shortPath = p.path.length > 45 ? p.path.slice(0,45) + '…' : p.path;
+                  return `<div style="margin-bottom:10px">
+                    <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+                      <span style="font-size:11px;color:var(--text-sub);font-family:monospace">${shortPath}</span>
+                      <span style="font-size:11px;font-weight:600;white-space:nowrap;margin-left:8px">${p.sessions.toLocaleString()} <span style="color:var(--text-muted);font-weight:400">(${sharePct}%)</span></span>
+                    </div>
+                    <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:#4d9fff"></div></div>
+                  </div>`;
+                }).join('') + `</div>`;
+              })()
+            : '<div class="empty-state">No page data available</div>'
+        }
+      </div>
+
+      <!-- Tracking + Cart Recovery + Channels + Weekly Rhythm -->
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="section-title">📡 Tracking Events</div>
+          <span class="tag">pt_view_tour</span><span class="tag">pt_start_checkout</span>
+          <span class="tag">pt_payment_attempt</span><span class="tag">pt_payment_succeeded</span>
+          <span class="tag">pt_payment_failed</span><span class="tag">pt_booking_confirmed</span>
+          <span class="tag">pt_checkout_idle_15m</span><span class="tag">pt_checkout_abandoned_60m</span>
+          <span class="tag">pt_phone_click</span><span class="tag">pt_whatsapp_click</span>
+          <hr>
+          <div class="section-title" style="margin-top:4px">🛒 Cart Recovery</div>
+          <div class="row"><span class="row-label">15 min</span><span class="row-value" style="color:#4d9fff">Email/SMS #1</span></div>
+          <div class="row"><span class="row-label">24 hr</span><span class="row-value" style="color:#4d9fff">Email #2 + support CTA</span></div>
+          <div class="row" style="margin-bottom:0"><span class="row-label">72 hr</span><span class="row-value" style="color:#9b6dff">Final + incentive option</span></div>
+        </div>
+        <div class="card">
+          <div class="section-title">🎯 Channels</div>
+          <div class="si row" data-id="mkt-google-ads" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span><span class="row-label">Google Ads</span><span class="badge badge-orange">Setup needed</span></div>
+          <div class="si row" data-id="mkt-meta-ads" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span><span class="row-label">Meta Ads</span><span class="badge badge-orange">Setup needed</span></div>
+          <div class="si row" data-id="mkt-gbp" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span><span class="row-label">Google Business Profile</span><span class="badge badge-orange">Optimise</span></div>
+          <div class="row"><span class="row-label">Instagram</span><span class="badge badge-blue">Active</span></div>
+          <div class="row"><span class="row-label">Facebook</span><span class="badge badge-blue">Active</span></div>
+          <div class="row"><span class="row-label">Email (Resend)</span><span class="badge badge-green">Live</span></div>
+          <hr>
+          <div class="section-title" style="margin-top:4px">🗓️ Weekly Rhythm</div>
+          <div class="row"><span class="row-label">Monday</span><span class="row-value">KPI + Incidents</span></div>
+          <div class="row"><span class="row-label">Wednesday</span><span class="row-value">Experiments + Release</span></div>
+          <div class="row" style="margin-bottom:0"><span class="row-label">Friday</span><span class="row-value">Security + Backlog</span></div>
+        </div>
       </div>
     </div>
   </div>
@@ -851,12 +1021,12 @@ function renderDashboard(rezdy, stripe, ga4, speed, days) {
     <div class="grid grid-2">
       <div class="card">
         <div class="section-title st-red">🔐 Security Checklist</div>
-        <div class="phase-item"><span style="color:#e05252">○</span>Rotate WP + Cloudflare + Google OAuth</div>
-        <div class="phase-item"><span style="color:#e05252">○</span>Block REST user enumeration</div>
-        <div class="phase-item"><span style="color:#e05252">○</span>Security headers (HSTS, XFO, XCTO)</div>
-        <div class="phase-item"><span style="color:#e05252">○</span>Cloudflare WAF + rate limits</div>
-        <div class="phase-item"><span style="color:#e05252">○</span>2FA all admin users</div>
-        <div class="phase-item"><span style="color:#e05252">○</span>Daily encrypted backups</div>
+        <div class="si phase-item" data-id="sec-rotate-credentials" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span>Rotate WP + Cloudflare + Google OAuth</div>
+        <div class="si phase-item" data-id="sec-rest-enumeration" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span>Block REST user enumeration</div>
+        <div class="si phase-item" data-id="sec-security-headers" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span>Security headers (HSTS, XFO, XCTO)</div>
+        <div class="si phase-item" data-id="sec-waf-rate-limits" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span>Cloudflare WAF + rate limits</div>
+        <div class="si phase-item" data-id="sec-2fa" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span>2FA all admin users</div>
+        <div class="si phase-item" data-id="sec-daily-backups" data-status="pending" onclick="cycleStatus(this)"><span class="si-dot"></span>Daily encrypted backups</div>
         <div class="phase-item"><span style="color:#27c27b">✓</span>Cloudflare CDN + HTTPS</div>
         <div class="phase-item"><span style="color:#27c27b">✓</span>Dashboard CF Access protected</div>
         <div class="phase-item"><span style="color:#27c27b">✓</span>sshguard running on Mac mini</div>
@@ -917,6 +1087,66 @@ function toggleTheme(){
     const btn = document.getElementById('themeBtn');
     if (btn) btn.textContent = saved === 'dark' ? '🌙' : '☀️';
   }
+})();
+
+// ── Item Status System ──────────────────────────────────────────────────────
+const STATUS_KEY = 'pt_status';
+const STATUS_CYCLE = ['pending','urgent','done','ignored'];
+
+function loadStatuses() {
+  try { return JSON.parse(localStorage.getItem(STATUS_KEY) || '{}'); } catch(e) { return {}; }
+}
+function saveStatuses(map) {
+  localStorage.setItem(STATUS_KEY, JSON.stringify(map));
+}
+
+function applyStatus(el, status) {
+  el.setAttribute('data-status', status);
+  const dot = el.querySelector('.si-dot');
+  if (dot) {
+    if (status === 'done') {
+      dot.className = 'si-done-dot';
+    } else {
+      dot.className = 'si-dot';
+    }
+  }
+}
+
+function cycleStatus(el) {
+  const id = el.getAttribute('data-id');
+  if (!id) return;
+  const map = loadStatuses();
+  const cur = map[id] || 'pending';
+  const next = STATUS_CYCLE[(STATUS_CYCLE.indexOf(cur) + 1) % STATUS_CYCLE.length];
+  map[id] = next;
+  saveStatuses(map);
+  // Apply to all elements with same data-id (same item may appear in multiple tabs)
+  document.querySelectorAll('[data-id="'+id+'"]').forEach(e => applyStatus(e, next));
+  updateStatusCounter();
+}
+
+function updateStatusCounter() {
+  const map = loadStatuses();
+  const vals = Object.values(map);
+  const urgent = vals.filter(v=>v==='urgent').length;
+  const done = vals.filter(v=>v==='done').length;
+  const ignored = vals.filter(v=>v==='ignored').length;
+  const el = document.getElementById('statusCounter');
+  if (el) {
+    el.innerHTML = urgent > 0 || done > 0 || ignored > 0
+      ? '<span class="s-urgent">'+urgent+' Urgent</span> · <span class="s-done">'+done+' Done</span> · <span class="s-ignored">'+ignored+' Ignored</span>'
+      : 'All items pending';
+  }
+}
+
+// Initialise all status items from localStorage on load
+(function initStatuses(){
+  const map = loadStatuses();
+  document.querySelectorAll('[data-id]').forEach(el => {
+    const id = el.getAttribute('data-id');
+    if (id && map[id]) applyStatus(el, map[id]);
+  });
+  updateStatusCounter();
 })();
 </script>
 </body>
