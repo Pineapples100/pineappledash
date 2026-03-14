@@ -101,7 +101,8 @@ async function getRezdyData(apiKey, days) {
 // Fetch live GA4 data using Web Crypto JWT signing
 async function getGA4Data(serviceAccountJson, days) {
   try {
-    const sa = JSON.parse(serviceAccountJson);
+    // Parse service account JSON — handle escaped newlines from CF Worker secrets
+    const sa = JSON.parse(serviceAccountJson.replace(/\\\\n/g, '\\n'));
     const now = Math.floor(Date.now() / 1000);
 
     // Build JWT header + payload (URL-safe base64, no padding)
@@ -116,10 +117,12 @@ async function getGA4Data(serviceAccountJson, days) {
     }));
 
     // Import private key using Web Crypto API (available in CF Workers)
-    const pemBody = sa.private_key
+    // Handle both literal newlines and escaped \\n from Worker secrets
+    const privateKey = sa.private_key.replace(/\\n/g, '\n');
+    const pemBody = privateKey
       .replace(/-----BEGIN PRIVATE KEY-----/,'')
       .replace(/-----END PRIVATE KEY-----/,'')
-      .replace(/\n/g,'');
+      .replace(/\s/g,'');
     const keyData = Uint8Array.from(atob(pemBody), c => c.charCodeAt(0));
     const cryptoKey = await crypto.subtle.importKey(
       'pkcs8', keyData.buffer,
