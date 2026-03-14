@@ -98,6 +98,125 @@ async function getRezdyData(apiKey, days) {
   }
 }
 
+// Fetch live GA4 data using Web Crypto JWT signing
+async function getGA4Data(serviceAccountJson, days) {
+  try {
+    const sa = JSON.parse(serviceAccountJson);
+    const now = Math.floor(Date.now() / 1000);
+
+    // Build JWT header + payload (URL-safe base64, no padding)
+    const b64u = s => btoa(s).replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
+    const header = b64u(JSON.stringify({alg:"RS256",typ:"JWT"}));
+    const payload = b64u(JSON.stringify({
+      iss: sa.client_email,
+      scope: "https://www.googleapis.com/auth/analytics.readonly",
+      aud: "https://oauth2.googleapis.com/token",
+      exp: now + 3600,
+      iat: now
+    }));
+
+    // Import private key using Web Crypto API (available in CF Workers)
+    const pemBody = sa.private_key
+      .replace(/-----BEGIN PRIVATE KEY-----/,'')
+      .replace(/-----END PRIVATE KEY-----/,'')
+      .replace(/\n/g,'');
+    const keyData = Uint8Array.from(atob(pemBody), c => c.charCodeAt(0));
+    const cryptoKey = await crypto.subtle.importKey(
+      'pkcs8', keyData.buffer,
+      {name:'RSASSA-PKCS1-v1_5', hash:'SHA-256'},
+      false, ['sign']
+    );
+
+    const signingInput = new TextEncoder().encode(`${header}.${payload}`);
+    const signature = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', cryptoKey, signingInput);
+    const sig = b64u(String.fromCharCode(...new Uint8Array(signature)));
+    const jwt = `${header}.${payload}.${sig}`;
+
+    // Exchange JWT for access token
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`
+    });
+    const { access_token } = await tokenRes.json();
+
+    const startDate = days === 1 ? 'today' : `${days}daysAgo`;
+
+    // Run all GA4 queries in parallel
+    const query = (body) => fetch(
+      'https://analyticsdata.googleapis.com/v1beta/properties/499317801:runReport',
+      {
+        method: 'POST',
+        headers: {'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      }
+    ).then(r => r.json());
+
+    const [channelData, totalsData, pagesData, deviceData] = await Promise.all([
+      query({
+        dateRanges: [{startDate, endDate:'today'}],
+        metrics: [{name:'sessions'},{name:'activeUsers'},{name:'newUsers'},{name:'bounceRate'}],
+        dimensions: [{name:'sessionDefaultChannelGroup'}]
+      }),
+      query({
+        dateRanges: [{startDate, endDate:'today'}],
+        metrics: [{name:'sessions'},{name:'activeUsers'},{name:'newUsers'},{name:'averageSessionDuration'},{name:'screenPageViews'}]
+      }),
+      query({
+        dateRanges: [{startDate, endDate:'today'}],
+        metrics: [{name:'sessions'},{name:'screenPageViews'}],
+        dimensions: [{name:'pagePath'}],
+        orderBys: [{metric:{metricName:'sessions'},desc:true}],
+        limit: 8
+      }),
+      query({
+        dateRanges: [{startDate, endDate:'today'}],
+        metrics: [{name:'sessions'}],
+        dimensions: [{name:'deviceCategory'}]
+      })
+    ]);
+
+    const channels = (channelData.rows || []).map(r => ({
+      channel: r.dimensionValues[0].value,
+      sessions: parseInt(r.metricValues[0].value),
+      users: parseInt(r.metricValues[1].value),
+      newUsers: parseInt(r.metricValues[2].value),
+      bounceRate: parseFloat(r.metricValues[3].value)
+    }));
+
+    const totRow = totalsData.rows?.[0];
+    const totals = totRow ? {
+      sessions: parseInt(totRow.metricValues[0].value),
+      users: parseInt(totRow.metricValues[1].value),
+      newUsers: parseInt(totRow.metricValues[2].value),
+      avgDuration: parseFloat(totRow.metricValues[3].value),
+      pageviews: parseInt(totRow.metricValues[4].value)
+    } : {};
+
+    const pages = (pagesData.rows || []).map(r => ({
+      path: r.dimensionValues[0].value,
+      sessions: parseInt(r.metricValues[0].value),
+      views: parseInt(r.metricValues[1].value)
+    }));
+
+    const devices = (deviceData.rows || []).map(r => ({
+      device: r.dimensionValues[0].value,
+      sessions: parseInt(r.metricValues[0].value)
+    }));
+
+    const organicSearch = channels.find(c => c.channel === 'Organic Search') || {sessions:0};
+    const paidSearch    = channels.find(c => c.channel === 'Paid Search')    || {sessions:0};
+    const paidSocial    = channels.find(c => c.channel === 'Paid Social')    || {sessions:0};
+    const direct        = channels.find(c => c.channel === 'Direct')         || {sessions:0};
+    const mobile        = devices.find(d => d.device === 'mobile')           || {sessions:0};
+    const totalDevSessions = devices.reduce((s,d) => s+d.sessions, 0);
+
+    return { channels, totals, pages, devices, organicSearch, paidSearch, paidSocial, direct, mobile, totalDevSessions };
+  } catch(e) {
+    return { error: e.message, totals:{}, channels:[], pages:[], devices:[], organicSearch:{sessions:0}, paidSearch:{sessions:0}, paidSocial:{sessions:0}, direct:{sessions:0}, mobile:{sessions:0}, totalDevSessions:0 };
+  }
+}
+
 // Fetch PageSpeed score
 async function getPageSpeed() {
   try {
@@ -131,7 +250,7 @@ function rangeName(days) {
   return `${days} Days`;
 }
 
-function renderDashboard(rezdy, stripe, speed, days) {
+function renderDashboard(rezdy, stripe, ga4, speed, days) {
   const now = new Date().toLocaleString('en-AU', {timeZone:'Australia/Brisbane',dateStyle:'medium',timeStyle:'short'});
   const rng = rangeName(days);
 
@@ -350,6 +469,30 @@ function renderDashboard(rezdy, stripe, speed, days) {
         </div>
       </div>
 
+      <!-- GA4 Web Traffic KPIs row -->
+      <div class="grid grid-4">
+        <div class="kpi-box">
+          <div class="kpi-value" style="color:#4d9fff">${ga4.error ? '—' : (ga4.totals.sessions ?? '—').toLocaleString?.() ?? (ga4.totals.sessions ?? '—')}</div>
+          <div class="kpi-label">Total Sessions</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">${ga4.error ? 'GA4 error' : (ga4.totals.users ?? 0).toLocaleString() + ' users · ' + rng}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="kpi-value" style="color:#27c27b">${ga4.error ? '—' : (ga4.organicSearch.sessions ?? 0).toLocaleString()}</div>
+          <div class="kpi-label">Organic Sessions</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">${ga4.error ? '' : 'Google organic · ' + rng}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="kpi-value" style="color:#9b6dff">${ga4.error ? '—' : (ga4.paidSocial.sessions ?? 0).toLocaleString()}</div>
+          <div class="kpi-label">Paid Social</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">${ga4.error ? '' : 'Meta / social ads · ' + rng}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="kpi-value" style="color:#f5a623">${ga4.error || !ga4.totalDevSessions ? '—' : Math.round((ga4.mobile.sessions / ga4.totalDevSessions) * 100) + '%'}</div>
+          <div class="kpi-label">Mobile %</div>
+          <div class="kpi-sub" style="color:var(--text-muted)">${ga4.error ? '' : (ga4.mobile.sessions ?? 0).toLocaleString() + ' mobile sessions'}</div>
+        </div>
+      </div>
+
       <!-- Sales Breakdown -->
       <div class="card">
         <div class="section-title">📊 Sales Breakdown · ${rng}</div>
@@ -527,7 +670,7 @@ function renderDashboard(rezdy, stripe, speed, days) {
           <div class="section-title">⚙️ Platform Status</div>
           <div class="row"><span class="row-label">Rezdy</span><span class="badge badge-green">✓ Live</span></div>
           <div class="row"><span class="row-label">Stripe</span><span class="badge badge-green">✓ Live</span></div>
-          <div class="row"><span class="row-label">GA4</span><span class="badge badge-orange">Connect GA4</span></div>
+          <div class="row"><span class="row-label">GA4</span><span class="badge ${ga4.error ? 'badge-orange' : 'badge-green'}">${ga4.error ? '⚠ GA4 error' : '✓ Live'}</span></div>
           <div class="row"><span class="row-label">Cart recovery</span><span class="badge badge-green">✓ 15m/24h/72h</span></div>
           <div class="row"><span class="row-label">Email (Resend)</span><span class="badge badge-green">✓ Live</span></div>
           <hr>
@@ -572,6 +715,58 @@ function renderDashboard(rezdy, stripe, speed, days) {
           <div class="kpi-value" style="color:var(--text-muted)">—</div>
           <div class="kpi-label">Organic Clicks/wk</div>
           <div class="kpi-sub" style="color:var(--text-muted)">Connect GSC</div>
+        </div>
+      </div>
+
+      <!-- GA4 Traffic by Channel + Top Pages -->
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="section-title st-green">📊 Traffic by Channel · ${rng}</div>
+          ${ga4.error
+            ? `<div class="empty-state">GA4 error: ${ga4.error}</div>`
+            : ga4.channels && ga4.channels.length > 0
+              ? (() => {
+                  const maxSess = Math.max(...ga4.channels.map(c => c.sessions), 1);
+                  return ga4.channels
+                    .sort((a,b) => b.sessions - a.sessions)
+                    .map(c => {
+                      const isOrganic = c.channel === 'Organic Search';
+                      const isPaid = c.channel.startsWith('Paid');
+                      const color = isOrganic ? '#27c27b' : isPaid ? '#4d9fff' : '#f5a623';
+                      const pct = Math.round((c.sessions / maxSess) * 100);
+                      return `<div style="margin-bottom:10px">
+                        <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+                          <span style="font-size:12px;color:${color};font-weight:${isOrganic?'700':'400'}">${c.channel}</span>
+                          <span style="font-size:12px;font-weight:600">${c.sessions.toLocaleString()}</span>
+                        </div>
+                        <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${color}"></div></div>
+                      </div>`;
+                    }).join('')
+                })()
+              : '<div class="empty-state">No channel data available</div>'
+          }
+        </div>
+        <div class="card">
+          <div class="section-title st-blue">📄 Top Pages · ${rng}</div>
+          ${ga4.error
+            ? `<div class="empty-state">GA4 error: ${ga4.error}</div>`
+            : ga4.pages && ga4.pages.length > 0
+              ? (() => {
+                  const maxSess = Math.max(...ga4.pages.map(p => p.sessions), 1);
+                  return ga4.pages.map(p => {
+                    const pct = Math.round((p.sessions / maxSess) * 100);
+                    const shortPath = p.path.length > 40 ? p.path.slice(0,40) + '…' : p.path;
+                    return `<div style="margin-bottom:9px">
+                      <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+                        <span style="font-size:11px;color:var(--text-sub);font-family:monospace">${shortPath}</span>
+                        <span style="font-size:11px;font-weight:600;white-space:nowrap;margin-left:8px">${p.sessions.toLocaleString()} sess</span>
+                      </div>
+                      <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:#4d9fff"></div></div>
+                    </div>`;
+                  }).join('')
+                })()
+              : '<div class="empty-state">No page data available</div>'
+          }
         </div>
       </div>
 
@@ -673,7 +868,7 @@ function renderDashboard(rezdy, stripe, speed, days) {
         <div class="row"><span class="row-label">CDN</span><span class="row-value">Cloudflare</span></div>
         <div class="row"><span class="row-label">Payments</span><span class="row-value">Stripe (live)</span></div>
         <div class="row"><span class="row-label">Bookings</span><span class="row-value" style="color:#27c27b">Rezdy ✓ Connected</span></div>
-        <div class="row"><span class="row-label">Analytics</span><span class="row-value">GA4 · Connect GA4</span></div>
+        <div class="row"><span class="row-label">Analytics</span><span class="row-value" style="color:${ga4.error ? '#f5a623' : '#27c27b'}">GA4 ${ga4.error ? '⚠ ' + ga4.error : '✓ Connected'}</span></div>
         <div class="row"><span class="row-label">Email</span><span class="row-value">Resend</span></div>
         <div class="row"><span class="row-label">Dashboard</span><span class="row-value">CF Workers · Edge</span></div>
         <div class="row" style="margin-bottom:0"><span class="row-label">Agent</span><span class="row-value">OpenClaw · POS 🍍</span></div>
@@ -754,13 +949,14 @@ export default {
     const days = [1, 7, 30, 90].includes(parseInt(rangeParam)) ? parseInt(rangeParam) : 7;
 
     // Fetch live data in parallel
-    const [rezdy, stripe, speed] = await Promise.all([
+    const [rezdy, stripe, ga4, speed] = await Promise.all([
       getRezdyData(env.REZDY_API_KEY, days),
       getStripeData(env.STRIPE_SECRET_KEY, days),
+      getGA4Data(env.GA4_SERVICE_ACCOUNT, days),
       getPageSpeed()
     ]);
 
-    return new Response(renderDashboard(rezdy, stripe, speed, days), {
+    return new Response(renderDashboard(rezdy, stripe, ga4, speed, days), {
       headers:{
         "Content-Type":"text/html",
         "X-Frame-Options":"DENY",
